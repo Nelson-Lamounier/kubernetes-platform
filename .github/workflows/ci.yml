@@ -1,0 +1,109 @@
+# @format
+# CI Pipeline — kubernetes-platform
+#
+# Validates Helm charts, Python deploy scripts, and Grafana dashboards
+# on every push and pull request to develop/main.
+
+name: CI — Platform Validation
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Job 1: Helm Template Validation
+  # ─────────────────────────────────────────────
+  helm-validate:
+    name: Helm Template Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.16.0'
+
+      # Monitoring chart — full template render
+      - name: Validate monitoring chart (development)
+        run: |
+          helm template monitoring charts/monitoring/chart/ \
+            -f charts/monitoring/chart/values.yaml \
+            -f charts/monitoring/chart/values-development.yaml \
+            --debug > /dev/null
+
+      # Crossplane XRDs — Helm chart render
+      - name: Validate crossplane-xrds chart
+        run: |
+          helm template crossplane-xrds charts/crossplane-xrds/chart/ \
+            --debug > /dev/null
+
+  # ─────────────────────────────────────────────
+  # Job 2: Python Lint (deploy scripts + helpers)
+  # ─────────────────────────────────────────────
+  python-lint:
+    name: Python Lint (Ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint deploy_helpers
+        run: ruff check deploy_helpers/
+
+      - name: Lint monitoring deploy.py
+        run: ruff check charts/monitoring/deploy.py
+
+  # ─────────────────────────────────────────────
+  # Job 3: Dashboard JSON Validation
+  # ─────────────────────────────────────────────
+  dashboard-validation:
+    name: Grafana Dashboard Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install tsx
+        run: npm install -g tsx
+
+      - name: Validate dashboard JSON files
+        run: npx tsx --test tests/validate-dashboards.test.ts
+
+  # ─────────────────────────────────────────────
+  # Job 4: YAML Lint (ArgoCD Applications)
+  # ─────────────────────────────────────────────
+  yaml-lint:
+    name: YAML Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint ArgoCD Application manifests
+        run: yamllint -c .yamllint.yml argocd-apps/
+        continue-on-error: true  # Advisory — ArgoCD apps may use non-standard YAML features
